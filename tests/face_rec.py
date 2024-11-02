@@ -1,6 +1,7 @@
 import face_recognition
 import cv2
 import numpy as np
+import os
 import sys
 
 # This is a demo of running face recognition on live video from your webcam. It's a little more complicated than the
@@ -20,23 +21,30 @@ else:
 
 video_capture = cv2.VideoCapture(video_source)
 
-# Load a sample picture and learn how to recognize it.
-obama_image = face_recognition.load_image_file("obama.jpg")
-obama_face_encoding = face_recognition.face_encodings(obama_image)[0]
+# # Load a sample picture and learn how to recognize it.
+# obama_image = face_recognition.load_image_file("obama.jpg")
+# obama_face_encoding = face_recognition.face_encodings(obama_image)[0]
 
-# Load a second sample picture and learn how to recognize it.
-biden_image = face_recognition.load_image_file("biden.jpg")
-biden_face_encoding = face_recognition.face_encodings(biden_image)[0]
+# # Load a second sample picture and learn how to recognize it.
+# biden_image = face_recognition.load_image_file("biden.jpg")
+# biden_face_encoding = face_recognition.face_encodings(biden_image)[0]
 
-# Create arrays of known face encodings and their names
-known_face_encodings = [
-    obama_face_encoding,
-    biden_face_encoding
-]
-known_face_names = [
-    "Barack Obama",
-    "Joe Biden"
-]
+# frank_image = face_recognition.load_image_file("frank.jpg")
+# frank_face_encoding = face_recognition.face_encodings(frank_image)[0]
+
+known_face_encodings = []
+known_face_names = []
+
+for filename in os.listdir("faces"):
+    f = os.path.join("faces", filename)
+    # checking if it is a file
+    if os.path.isfile(f):
+        img = face_recognition.load_image_file(f)
+        known_face_encodings.append(face_recognition.face_encodings(img)[0])
+        known_face_names.append(filename[:-4])
+
+
+
 
 # Initialize some variables
 face_locations = []
@@ -55,7 +63,7 @@ while video_capture.isOpened():
 
         # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
         rgb_small_frame = cv2.cvtColor(small_frame , cv2.COLOR_BGR2RGB)
-
+        
         # Find all the faces and face encodings in the current frame of video
         face_locations = face_recognition.face_locations(rgb_small_frame)
         face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
