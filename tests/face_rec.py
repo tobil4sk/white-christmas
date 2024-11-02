@@ -1,6 +1,7 @@
 import face_recognition
 import cv2
 import numpy as np
+import sys
 
 # This is a demo of running face recognition on live video from your webcam. It's a little more complicated than the
 # other example, but it includes some basic performance tweaks to make things run a lot faster:
@@ -11,8 +12,13 @@ import numpy as np
 # OpenCV is *not* required to use the face_recognition library. It's only required if you want to run this
 # specific demo. If you have trouble installing it, try any of the other demos that don't require it instead.
 
-# Get a reference to webcam #0 (the default one)
-video_capture = cv2.VideoCapture(0)
+if len(sys.argv) > 1:
+    video_source = sys.argv[1]
+else:
+    # Get a reference to webcam #0 (the default one)
+    video_source = 0
+
+video_capture = cv2.VideoCapture(video_source)
 
 # Load a sample picture and learn how to recognize it.
 obama_image = face_recognition.load_image_file("obama.jpg")
