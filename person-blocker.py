@@ -8,6 +8,9 @@ import torch
 from threading import Thread
 import atexit
 import face_recognition
+import pygame
+import random
+import math
 
 DOWNSCALE_HEIGHT = 720
 ENABLE_GPU = True
@@ -96,6 +99,7 @@ class FaceRecogniser:
             small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
             self.face_locations = face_recognition.face_locations(small_frame)
+            self.face_landmarks = face_recognition.face_landmarks(small_frame, self.face_locations)
 
             old_face_midpoints = self.face_midpoints
             old_face_markers = self.face_markers
@@ -118,6 +122,11 @@ class FaceRecogniser:
     def stop(self):
         self.running = False
 
+def cvimage_to_pygame(image):
+    """Convert cvimage into a pygame image"""
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    return pygame.image.frombuffer(image.tostring(), (image.shape[1], image.shape[0]),
+                                   "RGB")
 
 try: # GPU Support?
     torch.cuda.set_device(0)
@@ -159,6 +168,19 @@ def cleanup():
     video_getter.stop()
 
 atexit.register(cleanup)
+
+people = [["frank_head.png", (82, 190), (210, 205)], ["david_head.png", (42, 93), (80, 93)], ["damon_head.png", (95, 229), (200, 230)], ["anil_head.png", (98, 99), (160, 105)]]
+
+images = []
+left_eyes = []
+right_eyes = []
+for i in people:
+    images.append(pygame.image.load(i[0]))
+    left_eyes.append(i[1])
+    right_eyes.append(i[2])
+
+SCREEN = [1280, 720]
+screen = pygame.display.set_mode(SCREEN)
 
 # loop through frame
 while video_getter.running:
@@ -229,6 +251,7 @@ while video_getter.running:
 
     face_locations = face_recogniser.face_locations
     face_markers = face_recogniser.face_markers
+    face_landmarks = face_recogniser.face_landmarks
     for (top, right, bottom, left), blocked in zip(face_locations, face_markers):
         # Scale back up face locations since the frame we detected in was scaled to 1/4 size
         top *= 4
@@ -243,8 +266,59 @@ while video_getter.running:
         cv2.rectangle(final, (left, bottom - 35), (right, bottom), (0, 0, 255), cv2.FILLED)
         font = cv2.FONT_HERSHEY_DUPLEX
         cv2.putText(final, "blocked" if blocked else "allowed", (left + 6, bottom - 6), font, 1.0, (255, 255, 255), 1)
-    
+
     perf_log("Apply Effect + Outlines")
+
+    positions = []
+    scale_factor = 0.25
+    for i in range(len(face_locations)):
+        top, right, bottom, left = face_locations[i]
+        left_x, left_y = face_landmarks[i]["left_eye"][0]
+        right_x, right_y = face_landmarks[i]["right_eye"][0]
+
+        top //= scale_factor
+        right //= scale_factor
+        bottom //= scale_factor
+        left //= scale_factor
+        left_x //= scale_factor
+        left_y /= scale_factor
+        right_x /= scale_factor
+        right_y /= scale_factor
+
+        positions.append([top, right, bottom, left, left_x, left_y, right_x, right_y])
+    positions = sorted(positions, key=lambda x : x[1])
+
+    screen.blit(cvimage_to_pygame(final), (0, 0))
+
+    i = 0
+    for top, right, bottom, left, left_x, left_y, right_x, right_y in positions:
+        height = bottom - top + 1
+        width = right - left + 1
+        top -= height // 2
+        bottom += height // 2
+        left -= width // 2
+        right += width // 2
+
+        #frank = cv2.imread(people[i], cv2.IMREAD_UNCHANGED)
+        image = images[i]
+        left_eye = left_eyes[i]
+        right_eye = right_eyes[i]
+        i = (i + 1) % len(people)
+
+        u = (left_eye[0] - right_eye[0], left_eye[1] - right_eye[1])
+        v = (left_x - right_x, left_y - right_y)
+        old_mag = (u[0] * u[0] + u[1] * u[1])**0.5
+        new_mag = (v[0] * v[0] + v[1] * v[1])**0.5
+        
+        scale = new_mag / old_mag * 2
+        cross = u[0] * v[1] - u[1] * v[0]
+        angle = math.asin(cross / (new_mag * old_mag))
+        angle = -(angle / math.pi) * 180
+
+        image = pygame.transform.rotate(image, angle)
+        image = pygame.transform.scale(image, (right - left, bottom - top))
+        image_rect = pygame.Rect(left, top, right - left, bottom - top)
+        screen.blit(image, image_rect)
     
     frames += 1
     curr_time = time.perf_counter()
@@ -254,7 +328,8 @@ while video_getter.running:
         frames = 0
 
     # Show result to user on desktop
-    cv2.imshow('Output', final)
+    #cv2.imshow('Output', final)
+    pygame.display.update()
     
     perf_log("Display")
 
