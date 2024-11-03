@@ -4,9 +4,38 @@ import numpy as np
 import logging
 from ultralytics import YOLO
 import torch
+from threading import Thread
+import atexit
 
-DOWNSCALE_HEIGHT = 1000
+class VideoGetter:
+    def __init__(self, src):
+        self.stream = cv2.VideoCapture(src, cv2.CAP_ANY, params=[cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY])
+        self.stream.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+        self.stream.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+        self.stream.set(cv2.CAP_PROP_FPS, 30)
+        self.stream.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        (self.success, self.frame) = self.stream.read()
+        self.running = True
+
+    def start(self):
+        self.thread = Thread(target=self.get, args=())
+        self.thread.start()
+        return self
+    
+    def get(self):
+        while self.running:
+            if not self.success:
+                self.stop()
+            else:
+                self.success, self.frame = self.stream.read()
+        self.stream.release()
+    
+    def stop(self):
+        self.running = False
+
+DOWNSCALE_HEIGHT = 720
 ENABLE_GPU = True
+LOGGING = True
 
 try: # GPU Support?
     torch.cuda.set_device(0)
@@ -14,27 +43,42 @@ try: # GPU Support?
 except:
     pass
 
+print("Loading Models")
 seg_model = YOLO("yolo11n-seg.pt")
+print("Loaded Segmentation Model")
 
 logging.getLogger('ultralytics').setLevel(logging.ERROR)
-
-# get vid cap device
-USE_REMOTE = False
-if not USE_REMOTE:
-    cap = cv2.VideoCapture(0, cv2.CAP_MSMF, params=[cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY])
-else:
-    cap = cv2.VideoCapture("http://10.253.169.237:8080/video", cv2.CAP_MSMF, params=[cv2.CAP_PROP_HW_ACCELERATION, cv2.VIDEO_ACCELERATION_ANY])
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-cap.set(cv2.CAP_PROP_FPS, 30)
-cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
 
 frames = 0
 last_time = time.perf_counter()
 
+perf_timestamp = time.perf_counter()
+def perf_log(label):
+    global perf_timestamp
+    timestamp = time.perf_counter()
+    if LOGGING:
+        print(label + ":", round((timestamp - perf_timestamp) * 1000, 2))
+    perf_timestamp = timestamp
+
+print("Loading Video Stream")
+video_getter = VideoGetter(0).start()
+atexit.register(video_getter.stop)
+print("Loaded Video Stream")
+
 # loop through frame
-while cap.isOpened():
-    ret, frame = cap.read()
+while video_getter.running:
+    # Break loop outcome 
+    if cv2.waitKey(1) & 0xFF == ord('q') or not video_getter.running:
+        video_getter.stop()
+        break
+
+    if LOGGING:
+        perf_timestamp = time.perf_counter()
+        print("\n=== NEW FRAME ===\n")
+
+    frame = video_getter.frame
+    
+    perf_log("Grab Frame")
 
     frame_size = (frame.shape[1], frame.shape[0])
 
@@ -43,8 +87,12 @@ while cap.isOpened():
     downscale_size = (int(frame_size[0] * downscale_factor), int(frame_size[1] * downscale_factor))
     downscaled = cv2.resize(frame, downscale_size, interpolation=cv2.INTER_CUBIC)
 
+    perf_log("Downscale")
+
     # YOLO detection
-    results = seg_model(downscaled)
+    results = seg_model(downscaled, classes=[0])
+    
+    perf_log("Segment")
 
     merged_mask = np.ones((downscale_size[1], downscale_size[0]), dtype=np.uint8)
     
@@ -53,13 +101,13 @@ while cap.isOpened():
     for result in results:
         if result.masks is None:
             break
-        for mask, box in zip(result.masks, result.boxes):
-            name = seg_model.names[int(box.cls)]
-            if name != 'person':
-                continue
+        for mask in result.masks:
             points = np.int32([mask.xy])
             cv2.fillPoly(merged_mask, points, 0)
             cv2.polylines(outlines, np.rint(points / downscale_factor).astype(np.int32), True, 200, 2)
+
+
+    perf_log("Mask+Outlines")
 
     scaled_mask = cv2.resize(merged_mask, frame_size)
     final = cv2.bitwise_and(frame, frame, mask=scaled_mask)
@@ -75,6 +123,8 @@ while cap.isOpened():
     noise = cv2.resize(noise, frame_size, interpolation=cv2.INTER_LINEAR)
     effect += noise
     effect[effect < noise] = 255
+
+    perf_log("Effect")
     
     masked_effect = cv2.bitwise_and(effect, effect, mask=(1 - scaled_mask))
     masked_effect -= outlines
@@ -82,6 +132,8 @@ while cap.isOpened():
     masked_effect = cv2.blur(masked_effect, (3, 3))
 
     final += cv2.cvtColor(masked_effect, cv2.COLOR_GRAY2BGR)
+    
+    perf_log("Apply Effect + Outlines")
     
     frames += 1
     curr_time = time.perf_counter()
@@ -92,10 +144,7 @@ while cap.isOpened():
 
     # Show result to user on desktop
     cv2.imshow('Output', final)
+    
+    perf_log("Display")
 
-    # Break loop outcome 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-cap.release() # Releases webcam or capture device
 cv2.destroyAllWindows() # Closes imshow frames
