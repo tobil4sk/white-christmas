@@ -11,7 +11,8 @@ import face_recognition
 
 DOWNSCALE_HEIGHT = 720
 ENABLE_GPU = True
-LOGGING = True
+LOGGING = False
+BLOCK_ALL = False
 
 class VideoGetter:
     def __init__(self, src):
@@ -21,6 +22,7 @@ class VideoGetter:
         self.stream.set(cv2.CAP_PROP_FPS, 30)
         self.stream.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         (self.success, self.frame) = self.stream.read()
+        self.idx = 0
         self.running = True
 
     def start(self):
@@ -35,6 +37,7 @@ class VideoGetter:
                 self.running = False
             else:
                 self.success, self.frame = self.stream.read()
+                self.idx += 1
         self.stream.release()
     
     def stop(self):
@@ -55,6 +58,8 @@ class FaceRecogniser:
                 img = face_recognition.load_image_file(path)
                 for encoding in face_recognition.face_encodings(img):
                     self.known_embeddings.append(encoding)
+        self.last_frame = 0
+        self.last_rec = 0
 
         self.running = True
     
@@ -72,6 +77,10 @@ class FaceRecogniser:
     
     def recognise(self):
         while self.running:
+            if self.last_rec >= self.last_frame:
+                time.sleep(0.01)
+                continue
+            self.last_rec = self.last_frame
             small_frame = cv2.resize(self.video_getter.frame, (0, 0), fx=0.25, fy=0.25)
             small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
@@ -81,19 +90,21 @@ class FaceRecogniser:
                 continue
             face_encodings = face_recognition.face_encodings(small_frame, face_locations)
             
-            print("RECOGNISE")
             self.face_markers = []
             for face_encoding in face_encodings:
                 # See if the face is a match for the known face(s)
                 matches = face_recognition.compare_faces(self.known_embeddings, face_encoding)
                 self.face_markers.append(any(matches))
-            time.sleep(0.5)
+            time.sleep(1.5)
 
     def get(self):
         while self.running:
-            print("DETECT")
+            if self.last_frame >= self.video_getter.idx:
+                time.sleep(0.01)
+                continue
             small_frame = cv2.resize(self.video_getter.frame, (0, 0), fx=0.25, fy=0.25)
             small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+            self.last_frame = self.video_getter.idx
 
             self.face_locations = face_recognition.face_locations(small_frame)
 
@@ -160,6 +171,19 @@ def cleanup():
 
 atexit.register(cleanup)
 
+# Accepts arguments of the form [xMin, yMin, xMax, yMax]
+def contains_box(a, b):
+    # Check if box a contains box b
+    a_contains_b = (a[0] <= b[0] and a[1] <= b[1] and
+                    a[2] >= b[2] and a[3] >= b[3])
+
+    # Check if box b contains box a
+    b_contains_a = (b[0] <= a[0] and b[1] <= a[1] and
+                    b[2] >= a[2] and b[3] >= a[3])
+
+    # Return True if either box contains the other
+    return a_contains_b or b_contains_a
+
 # loop through frame
 while video_getter.running:
     # Break loop outcome 
@@ -186,17 +210,32 @@ while video_getter.running:
 
     # YOLO detection
     results = seg_model(downscaled, classes=[0])
+
+    face_locations = list(face_recogniser.face_locations)
+    face_markers = list(face_recogniser.face_markers)
     
     perf_log("Segment")
 
     merged_mask = np.ones((downscale_size[1], downscale_size[0]), dtype=np.uint8)
     
     outlines = np.full((frame_size[1], frame_size[0]), 0, dtype=np.uint8)
-
     for result in results:
         if result.masks is None:
             break
-        for mask in result.masks:
+        for mask, box in zip(result.masks, result.boxes.xyxy):
+            isblocked = False
+            i = -1
+            for (top, right, bottom, left), blocked in zip(face_locations, face_markers):
+                i += 1
+                if not blocked:
+                    continue
+                if contains_box(box.numpy() / downscale_factor, [left * 4, bottom * 4, right * 4, top * 4]):
+                    isblocked = True
+                    face_locations.pop(i)
+                    face_markers.pop(i)
+                    break
+            if not isblocked and not BLOCK_ALL:
+                continue
             points = np.int32([mask.xy])
             cv2.fillPoly(merged_mask, points, 0)
             cv2.polylines(outlines, np.rint(points / downscale_factor).astype(np.int32), True, 200, 2)
@@ -227,22 +266,29 @@ while video_getter.running:
 
     final += cv2.cvtColor(masked_effect, cv2.COLOR_GRAY2BGR)
 
-    face_locations = face_recogniser.face_locations
-    face_markers = face_recogniser.face_markers
-    for (top, right, bottom, left), blocked in zip(face_locations, face_markers):
-        # Scale back up face locations since the frame we detected in was scaled to 1/4 size
-        top *= 4
-        right *= 4
-        bottom *= 4
-        left *= 4
+    # for result in results:
+    #     if result.boxes is None:
+    #         break
+    #     for box in result.boxes.xyxy:
+    #         left, bottom, right, top = box.numpy() / downscale_factor
+    #         cv2.rectangle(final, (int(left), int(top)), (int(right), int(bottom)), (255, 0, 0), 2)
 
-        # Draw a box around the face
-        cv2.rectangle(final, (left, top), (right, bottom), (0, 0, 255), 2)
+    # face_locations = face_recogniser.face_locations
+    # face_markers = face_recogniser.face_markers
+    # for (top, right, bottom, left), blocked in zip(face_locations, face_markers):
+    #     # Scale back up face locations since the frame we detected in was scaled to 1/4 size
+    #     top *= 4
+    #     right *= 4
+    #     bottom *= 4
+    #     left *= 4
 
-        # Draw a label with a name below the face
-        cv2.rectangle(final, (left, bottom - 35), (right, bottom), (0, 0, 255), cv2.FILLED)
-        font = cv2.FONT_HERSHEY_DUPLEX
-        cv2.putText(final, "blocked" if blocked else "allowed", (left + 6, bottom - 6), font, 1.0, (255, 255, 255), 1)
+    #     # Draw a box around the face
+    #     cv2.rectangle(final, (left, top), (right, bottom), (0, 0, 255), 2)
+
+    #     # Draw a label with a name below the face
+    #     cv2.rectangle(final, (left, bottom - 35), (right, bottom), (0, 0, 255), cv2.FILLED)
+    #     font = cv2.FONT_HERSHEY_DUPLEX
+    #     cv2.putText(final, "blocked" if blocked else "allowed", (left + 6, bottom - 6), font, 1.0, (255, 255, 255), 1)
     
     perf_log("Apply Effect + Outlines")
     
