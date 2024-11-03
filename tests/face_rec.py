@@ -53,7 +53,7 @@ face_encodings = []
 face_midpoints: list[tuple[int, int]] = []
 face_markers: list[bool] = []
 frame_count = 0
-FRAME_BETWEEN_MATCHING = 10
+FRAMES_BETWEEN_MATCHING = 10
 
 def get_face_midpoints(face_locations: list[tuple[int, int, int, int]]):
     # return np.array([[(top + bottom) // 2, (right + left) // 2] for top, right, bottom, left in face_locations])
@@ -84,7 +84,7 @@ while video_capture.isOpened():
 
         if frame_count == 0 or len(face_midpoints) != len(old_face_midpoints):
             face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
-            frame_count = FRAME_BETWEEN_MATCHING
+            frame_count = FRAMES_BETWEEN_MATCHING
 
             for face_encoding in face_encodings:
                 # See if the face is a match for the known face(s)
