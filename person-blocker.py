@@ -106,11 +106,10 @@ while video_getter.running:
             cv2.fillPoly(merged_mask, points, 0)
             cv2.polylines(outlines, np.rint(points / downscale_factor).astype(np.int32), True, 200, 2)
 
-
-    perf_log("Mask+Outlines")
-
     scaled_mask = cv2.resize(merged_mask, frame_size)
     final = cv2.bitwise_and(frame, frame, mask=scaled_mask)
+
+    perf_log("Mask+Outlines")
 
     lowres_size = (frame_size[0] // 20, frame_size[1] // 20)
     lowres_effect = (255 - cv2.cvtColor(cv2.resize(frame, lowres_size, interpolation=cv2.INTER_LINEAR), cv2.COLOR_BGR2GRAY))
