@@ -18,7 +18,7 @@ if len(sys.argv) > 1:
     video_source = sys.argv[1]
 else:
     # Get a reference to webcam #0 (the default one)
-    video_source = 2
+    video_source = 0
 
 video_capture = cv2.VideoCapture(video_source)
 
