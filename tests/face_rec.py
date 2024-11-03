@@ -1,6 +1,7 @@
 import face_recognition
 import cv2
 import numpy as np
+import numpy.typing as npt
 import os
 import sys
 
@@ -17,7 +18,7 @@ if len(sys.argv) > 1:
     video_source = sys.argv[1]
 else:
     # Get a reference to webcam #0 (the default one)
-    video_source = 0
+    video_source = 2
 
 video_capture = cv2.VideoCapture(video_source)
 
@@ -49,7 +50,15 @@ for filename in os.listdir("faces"):
 # Initialize some variables
 face_locations = []
 face_encodings = []
-face_names = []
+face_midpoints: list[tuple[int, int]] = []
+face_markers: list[bool] = []
+frame_count = 0
+FRAME_BETWEEN_MATCHING = 10
+
+def get_face_midpoints(face_locations: list[tuple[int, int, int, int]]):
+    # return np.array([[(top + bottom) // 2, (right + left) // 2] for top, right, bottom, left in face_locations])
+    return [((top + bottom) // 2, (right + left) // 2) for top, right, bottom, left in face_locations]
+
 process_this_frame = True
 
 while video_capture.isOpened():
@@ -63,35 +72,39 @@ while video_capture.isOpened():
 
         # Convert the image from BGR color (which OpenCV uses) to RGB color (which face_recognition uses)
         rgb_small_frame = cv2.cvtColor(small_frame , cv2.COLOR_BGR2RGB)
-        
+
         # Find all the faces and face encodings in the current frame of video
         face_locations = face_recognition.face_locations(rgb_small_frame)
-        face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
 
-        face_names = []
-        for face_encoding in face_encodings:
-            # See if the face is a match for the known face(s)
-            matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
-            name = "Unknown"
+        old_face_midpoints = face_midpoints
+        old_face_markers = face_markers
 
-            # # If a match was found in known_face_encodings, just use the first one.
-            # if True in matches:
-            #     first_match_index = matches.index(True)
-            #     name = known_face_names[first_match_index]
+        face_midpoints = get_face_midpoints(face_locations)
+        face_markers = []
 
-            # Or instead, use the known face with the smallest distance to the new face
-            face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
-            best_match_index = np.argmin(face_distances)
-            if matches[best_match_index]:
-                name = known_face_names[best_match_index]
+        if frame_count == 0 or len(face_midpoints) != len(old_face_midpoints):
+            face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
+            frame_count = FRAME_BETWEEN_MATCHING
 
-            face_names.append(name)
+            for face_encoding in face_encodings:
+                # See if the face is a match for the known face(s)
+                matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
+                face_markers.append(any(matches))
+        else:
+            frame_count -= 1
+
+            for face_midpoint in face_midpoints:
+                distances = np.linalg.vector_norm(face_midpoint - np.array(old_face_midpoints))
+                i = np.argmin(distances)
+
+                old_face_midpoints.pop(i)
+                face_markers.append(old_face_markers.pop(i))
 
     process_this_frame = not process_this_frame
 
 
     # Display the results
-    for (top, right, bottom, left), name in zip(face_locations, face_names):
+    for (top, right, bottom, left), blocked in zip(face_locations, face_markers):
         # Scale back up face locations since the frame we detected in was scaled to 1/4 size
         top *= 4
         right *= 4
@@ -104,7 +117,7 @@ while video_capture.isOpened():
         # Draw a label with a name below the face
         cv2.rectangle(frame, (left, bottom - 35), (right, bottom), (0, 0, 255), cv2.FILLED)
         font = cv2.FONT_HERSHEY_DUPLEX
-        cv2.putText(frame, name, (left + 6, bottom - 6), font, 1.0, (255, 255, 255), 1)
+        cv2.putText(frame, "blocked" if blocked else "allowed", (left + 6, bottom - 6), font, 1.0, (255, 255, 255), 1)
 
     # Display the resulting image
     cv2.imshow('Video', frame)
